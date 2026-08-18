@@ -1,0 +1,38 @@
+[
+  {
+    "snippet": "Cordis A Meta-Framework of Spatiotemporal Composability. Cordis is under active development. The API is not yet stable and may change without notice.",
+    "title": "Cordis - Meta-Framework of Spatiotemporal Composability",
+    "type": "result",
+    "url": "https://github.com/cordiverse/cordis"
+  },
+  {
+    "snippet": "Cordis is the plugin framework powering DeepSeek Harness: reversible effects, reactive dependencies, and why 'everything is a plugin' matters ...",
+    "title": "Cordis — The Plugin Kernel Behind DeepSeek Harness",
+    "type": "result",
+    "url": "https://floatboat.ai/blog/cordis-plugin-framework"
+  },
+  {
+    "snippet": "X · zhengyaojiang380+ likes  ·  3 days ago",
+    "title": "Had a look at Cordis, the theory behind DeepSeek ...",
+    "type": "result",
+    "url": "https://x.com/zhengyaojiang/status/2088362370213216260"
+  },
+  {
+    "snippet": "6 hours ago — Cordis is a modular plugin framework for Node.js applications that provides sophisticated dependency injection, lifecycle management, and event ...",
+    "title": "Cordis: The Meta-Framework That Treats Plugin Lifetime as a ...",
+    "type": "result",
+    "url": "https://starlog.is/articles/developer-tools/cordiverse-cordis"
+  },
+  {
+    "snippet": "DeepSeek Harness is built on Cordis's plugin system. Plugins provide every agent capability, including models, tools, skills, sessions, sandboxes, storage, ...",
+    "title": "DeepSeek Harness developer preview: Everything is a ...",
+    "type": "result",
+    "url": "https://deepseek.com/harness/en/"
+  },
+  {
+    "snippet": "1 day ago — Cordis is a context-based plugin framework with scoped dependency injection, lifecycle-owned effects, events, configuration interception, and ...",
+    "title": "cordis - Rust",
+    "type": "result",
+    "url": "https://docs.rs/cordis-rs/latest/cordis/"
+  }
+]
