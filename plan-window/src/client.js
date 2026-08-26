@@ -12,7 +12,15 @@
  *    generic questions, approvals — falls through untouched. A crash here
  *    degrades to a decline, so the shipped card still catches the wait.
  *  - `shell.overlay` list entry renders the window: drag by header, resize
- *    by the bottom-right handle, close/reopen from the composer strip.
+ *    by the bottom-right handle. The header "x" DISMISSES the review - the
+ *    same wire encoding as "Chat instead" (ASK_CANCELLED) - so the wait
+ *    settles, the composer chain falls back to the input bar and the
+ *    session is back in conversation mode: a close that actually closes.
+ *    Hide/reopen from the composer strip stays non-destructive, and a hide
+ *    STICKS across session switches: the strip entry is session-scoped and
+ *    remounts on every switch, so the window auto-opens only for a NEW
+ *    carrier key (a re-submitted plan), never for a remount of the same
+ *    review that the user already closed.
  *    The frame is ported to document.body at z-index 1200 — above the
  *    host's modal (1000) and toast (1100) layers and any sibling plugin
  *    overlay — because the overlay container itself is a z-index:20
@@ -25,8 +33,9 @@
  *    "+") to add a quoted comment card. "Send comments & keep planning"
  *    answers the review question with `['Keep planning'] + custom`
  *    (the exit_plan_mode host reads that as revision feedback); Approve
- *    answers `['Approve']` (plan mode exits); "Chat instead" cancels the
- *    wait (ASK_CANCELLED) and returns the composer.
+ *    answers `['Approve']` (plan mode exits); "Chat instead" - and the
+ *    window's "x" - cancels the wait (ASK_CANCELLED) and returns the
+ *    composer.
  *
  * Hand-written bundle (no build step): plain factory + React.createElement.
  * @module dsh-plan-window/client
@@ -65,6 +74,7 @@ window.__ModuleLoader__.load({
       strip: '计划评审中 · 请在浮动窗口中查看与评论',
       show: '显示窗口',
       hide: '收起窗口',
+      close: '关闭并转为对话',
       title: '计划评审',
       empty: '划选计划文字后松开，或悬停段落点 “＋”，即可添加评论',
       placeholder: '写下你的修改意见…',
@@ -79,6 +89,7 @@ window.__ModuleLoader__.load({
       strip: 'Plan review · view & comment in the floating window',
       show: 'Show window',
       hide: 'Hide window',
+      close: 'Close & chat instead',
       title: 'Plan review',
       empty: 'Select text in the plan, or hover a block and press “+”, to add a comment',
       placeholder: 'Write your feedback…',
@@ -116,6 +127,7 @@ window.__ModuleLoader__.load({
       wait: null,        // elected PendingWait carrier
       review: null,     // { id, question, plan, approveLabel, declineLabel }
       open: true,
+      openKey: null,    // carrier key store.open belongs to: auto-open only when the key CHANGES (new review), so a session-switch remount keeps a user-hidden window hidden
       geo: null,        // window geometry; null until first open (computed centered then), kept across submissions
       commentKey: null, // carrier key the comment list belongs to
       comments: [],     // { cid, blockIndex, quote, text }
@@ -168,6 +180,33 @@ window.__ModuleLoader__.load({
         if (item === null || item === undefined || item.kind !== 'question') return false
         return asPlanReview(item) !== null
       }) || null
+    }
+
+    /**
+     * Store mutation when the strip (re-)elects a review carrier: publish
+     * the wait and narrowed review, reset the comment list per carrier key,
+     * and auto-open the window ONLY for a carrier key the store has not
+     * seen. The composer entry is session-scoped and remounts on every
+     * session switch, so a same-key re-election is almost always that
+     * remount - reopening there would resurrect a window the user had
+     * closed ("closed but not actually closed"). A genuinely new review
+     * (new carrier key: a re-submitted plan) still reopens the window.
+     * Returns the narrowed review, or null for a non-review carrier.
+     */
+    var electReview = function (store, matched) {
+      var review = asPlanReview(matched)
+      if (review === null || matched === undefined) return null
+      store.wait = matched
+      store.review = review
+      if (store.openKey !== matched.key) {
+        store.openKey = matched.key
+        store.open = true
+      }
+      if (store.commentKey !== matched.key) {
+        store.commentKey = matched.key
+        store.comments = []
+      }
+      return review
     }
 
     // ---------- mini markdown renderer (blocks + bold/italic/code spans) ----------
@@ -340,6 +379,19 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Dismiss (cancel) payload: the exact wire encoding of the shipped
+     * PendingQuestion.cancel. Settles the review wait as ASK_CANCELLED -
+     * the pending list drops the carrier, the composer chain falls back to
+     * the input bar and the session is back in conversation mode.
+     */
+    var dismissPayload = function () {
+      return {
+        ok: false,
+        error: { code: 'cancelled', message: 'the user closed this question request', details: {} },
+      }
+    }
+
     // ---------- geometry (centered default + viewport clamping) ----------
 
     /**
@@ -395,15 +447,7 @@ window.__ModuleLoader__.load({
       var force = React.useState(0)[1]
       React.useEffect(function () { return subscribe(function () { force(function (v) { return v + 1 }) }) }, [])
       React.useEffect(function () {
-        var review = asPlanReview(matched)
-        if (review === null || matched === undefined) return undefined
-        store.wait = matched
-        store.review = review
-        store.open = true
-        if (store.commentKey !== matched.key) {
-          store.commentKey = matched.key
-          store.comments = []
-        }
+        if (electReview(store, matched) === null) return undefined
         emit()
         return function () {
           if (store.wait === matched) {
@@ -597,11 +641,9 @@ window.__ModuleLoader__.load({
         if (!hasText()) { setError(t('emptyComment')); return }
         send(keepPlanningPayload(wait.sessionId, review.id, formatFeedback(comments, L)))
       }
-      var discuss = function () {
-        send({
-          ok: false,
-          error: { code: 'cancelled', message: 'the user closed this question request', details: {} },
-        })
+      /** Dismiss the review (footer "Chat instead" and the header "x"). */
+      var dismiss = function () {
+        send(dismissPayload())
       }
 
       // ----- render -----
@@ -662,8 +704,8 @@ window.__ModuleLoader__.load({
           React.createElement('span', { className: 'plnwin-title' }, t('title')),
           React.createElement('span', { className: 'plnwin-badge' }, L.badge(comments.length)),
           React.createElement('button', {
-            type: 'button', className: 'plnwin-close', 'aria-label': t('hide'), title: t('hide'),
-            onClick: function () { store.open = false; emit() },
+            type: 'button', className: 'plnwin-close', 'aria-label': t('close'), title: t('close'),
+            disabled: busy, onClick: dismiss,
           }, '×'),
         ),
         React.createElement('div', { className: 'plnwin-main' },
@@ -678,7 +720,7 @@ window.__ModuleLoader__.load({
           React.createElement('div', { className: 'plnwin-error', role: 'status' }, error !== null ? error : ''),
           React.createElement('div', { className: 'plnwin-footer-actions' },
             React.createElement('button', {
-              type: 'button', className: 'plnwin-btn plnwin-btn-ghost', disabled: busy, onClick: discuss,
+              type: 'button', className: 'plnwin-btn plnwin-btn-ghost', disabled: busy, onClick: dismiss,
             }, t('discuss')),
             review.declineLabel !== null
               ? React.createElement('button', {
@@ -718,6 +760,7 @@ window.__ModuleLoader__.load({
       '.plnwin-badge{font-size:12px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:1px 10px;white-space:nowrap}',
       '.plnwin-close{margin-left:auto;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:16px;line-height:1;cursor:pointer;border-radius:6px;padding:2px 8px}',
       '.plnwin-close:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}',
+      '.plnwin-close:disabled{opacity:.5;cursor:not-allowed;background:transparent;color:var(--dsw-alias-label-secondary)}',
       '.plnwin-main{flex:1;min-height:0;display:flex}',
       '.plnwin-body{flex:1.2;min-width:0;overflow:auto;padding:16px 18px 24px 38px;line-height:1.65}',
       '.plnwin-body ::selection{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 25%,transparent)}',
@@ -810,8 +853,10 @@ window.__ModuleLoader__.load({
     // Pure helpers exposed for tests only (not part of the plugin contract).
     exports.__testables = {
       asPlanReview: asPlanReview, parseBlocks: parseBlocks, formatFeedback: formatFeedback,
-      approvePayload: approvePayload, keepPlanningPayload: keepPlanningPayload, STR: STR,
+      approvePayload: approvePayload, keepPlanningPayload: keepPlanningPayload,
+      dismissPayload: dismissPayload, electReview: electReview, STR: STR,
       clampGeo: clampGeo, initialGeo: initialGeo, CSS: CSS,
+      WindowFrame: WindowFrame, store: store,
     }
     return module.exports
   },

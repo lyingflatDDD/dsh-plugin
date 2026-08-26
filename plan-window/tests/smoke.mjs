@@ -158,6 +158,111 @@ test('decision payloads satisfy the single-select XOR wire rule', () => {
   assert.ok(keepItem.custom.trim() !== '')
 })
 
+// Regression (close "did not actually close"): dismissing the review must
+// use the shipped PendingQuestion.cancel encoding - ok:false + cancelled
+// error - so the host settles the wait (ASK_CANCELLED), the pending list
+// drops the carrier and the composer chain falls back to the input bar
+// (conversation mode).
+test('dismissPayload mirrors the shipped cancel encoding', () => {
+  const { dismissPayload } = loadClientBundle().__testables
+  assert.deepEqual(dismissPayload(), {
+    ok: false,
+    error: { code: 'cancelled', message: 'the user closed this question request', details: {} },
+  })
+})
+
+// Regression (window popped back after switching sessions): the composer
+// entry is session-scoped and remounts on every session switch, so its
+// election may only auto-open a NEW carrier key. A same-key re-election
+// (session switch away and back) must keep the user's hidden state and
+// draft comments; only a re-submitted plan (new key) reopens.
+test('electReview auto-opens only a new carrier, keeping a user-hidden window hidden', () => {
+  const { electReview } = loadClientBundle().__testables
+  const freshStore = () => ({
+    wait: null, review: null, open: true, openKey: null, geo: null,
+    commentKey: null, comments: [], lastAdded: null, listeners: new Set(),
+  })
+  const carrier = wait([planQuestion()]) // key 'k1'
+
+  const store = freshStore()
+  assert.notEqual(electReview(store, carrier), null)
+  assert.equal(store.wait, carrier)
+  assert.equal(store.open, true, 'first election opens the window')
+  assert.equal(store.openKey, 'k1')
+
+  // user hides the window, drafts a comment
+  store.open = false
+  store.comments = [{ cid: 'c1', blockIndex: 0, quote: '', text: 'tighten step 2' }]
+
+  // session switch away and back: same carrier re-elected by the remount
+  assert.notEqual(electReview(store, carrier), null)
+  assert.equal(store.open, false, 'same-key remount must NOT reopen a hidden window')
+  assert.equal(store.wait, carrier)
+  assert.equal(store.comments.length, 1, 'same-key remount must keep draft comments')
+
+  // model re-submits: a new carrier key reopens with a clean comment list
+  const resubmitted = { ...carrier, key: 'k2' }
+  assert.notEqual(electReview(store, resubmitted), null)
+  assert.equal(store.open, true, 'a new review reopens the window')
+  assert.equal(store.openKey, 'k2')
+  assert.deepEqual(store.comments, [], 'a new review resets the comment list')
+
+  // a non-review carrier is declined without touching the store
+  const untouched = freshStore()
+  assert.equal(electReview(untouched, { kind: 'question', key: 'x', payload: { questions: [] } }), null)
+  assert.equal(untouched.wait, null)
+  assert.equal(untouched.openKey, null)
+})
+
+/** Depth-first walk of the stub element tree, collecting elements whose props match. */
+function findAll(node, pred, out = []) {
+  if (node === null || typeof node !== 'object') return out
+  if (node.stub === 'element') {
+    const props = node.args[1] ?? {}
+    if (pred(props)) out.push(node)
+    for (let i = 2; i < node.args.length; i++) findAll(node.args[i], pred, out)
+  } else if (Array.isArray(node)) {
+    for (const item of node) findAll(item, pred, out)
+  }
+  return out
+}
+
+// Regression: the window's header "x" used to only flip store.open, leaving
+// the review wait pending (composer still taken over, window popping back
+// after a session switch). It must DISMISS the review - respond with the
+// cancel payload, exactly like the footer "Chat instead" button.
+test('window close button dismisses the review instead of hiding it', async () => {
+  const { WindowFrame, dismissPayload, store } = loadClientBundle().__testables
+  const sent = []
+  const carrier = {
+    key: 'q:1',
+    sessionId: 's1',
+    respond: (payload) => { sent.push(payload); return Promise.resolve({ accepted: true }) },
+  }
+  const review = {
+    id: 'plan-review', question: 'Approve this plan and leave plan mode?',
+    plan: '# Title\n\nbody', approveLabel: 'Approve', declineLabel: 'Keep planning',
+  }
+  const tree = WindowFrame({ wait: carrier, review })
+  const close = findAll(tree, props => props.className === 'plnwin-close')[0]
+  assert.ok(close, 'the header close button must render')
+  assert.equal(close.args[1].title, '关闭并转为对话')
+
+  store.open = true
+  close.args[1].onClick()
+  assert.deepEqual(sent, [dismissPayload()], 'clicking "x" must send the cancel payload')
+  assert.equal(sent[0].ok, false)
+  assert.equal(sent[0].error.code, 'cancelled')
+  assert.equal(store.open, true, '"x" dismisses the review; it must not merely hide the window')
+
+  // the footer "Chat instead" button shares the same dismiss path
+  const discuss = findAll(tree, props => props.className === 'plnwin-btn plnwin-btn-ghost')[0]
+  assert.ok(discuss, 'the footer Chat-instead button must render')
+  discuss.args[1].onClick()
+  assert.equal(sent.length, 2, 'the footer button sends the same dismissal')
+  await Promise.resolve() // let the receipt callbacks settle
+})
+
 test('clampGeo keeps the window reachable inside the viewport', () => {
   const { clampGeo } = loadClientBundle().__testables
   // in-viewport geometry passes through untouched
