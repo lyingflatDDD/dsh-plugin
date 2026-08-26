@@ -19,12 +19,12 @@
 
 ## 安装（已配置在本机）
 
-挂载方式是 DSH 官方的**用户级 home patch**（`~/.dsh/cordis.patch.yml`），`dsh web` 实时监视该文件、**无需重启即生效**：
+挂载方式是 DSH 官方的**用户级 home patch**（`~/.dsh/cordis.patch.yml`），`dsh web` 实时监视该文件、**无需重启即生效**（注意：**插件源码**改动仍需重启 `dsh web`；patch 热重载只影响组合结构）：
 
 ```yaml
 - insert:
     - id: web-search
-      name: file:///home/cxiao/code/dsh-plugin/web-search/src/index.js
+      name: dsh-web-search
 
 - id: web
   name: '@deepseek-ai/dsh-web'
@@ -32,18 +32,45 @@
     searchProvider: web-search-multi
 ```
 
+`dsh-web-search` 需要先作为包安装进 web profile，这样它的**浏览器半身**（`client.js`，经 `dsh.client` 声明）才会被 client-modules 扫描到、伺服到 `/plugins/dsh-web-search/client.js`，并出现在 `window.__DSH_BOOT__`：
+
+```bash
+cd ~/code/dsh-plugin
+dsh plugin --profile web add link:./web-search     # 或 link: 绝对路径
+```
+
 两条 patch 的作用：
 
-1. `insert` 把本插件作为 host 组合的一行挂载（插件 `apply` 时向 `ctx.web` 注册 `web-search-multi` provider）；
+1. `insert` 把本插件作为 host 组合的一行挂载（插件 `apply` 时向 `ctx.web` 注册 `web-search-multi` provider，并在宿主 `settings` seam 注册 `web-search` 命名空间）；
 2. `id: web` 覆盖把 seam 的 provider 选择从内置钉选的 `deepseek-official` 改为 `web-search-multi`。**必须改这个钉选**：DSH 的 bundle 在 `packages/bundle/base/cordis.patch.yml` 里写死了 `searchProvider: deepseek-official`，且 config 优先于 `$DSH_WEB_SEARCH_PROVIDER` 环境变量，所以环境变量无法切换。
 
-**回滚**：删除或清空 `~/.dsh/cordis.patch.yml` 即可 - 监视器会卸载插件并恢复 deepseek 原状（已实测验证）。
+**回滚**：删除或清空 `~/.dsh/cordis.patch.yml`（并把 patch 里第一个 insert 恢复为 `file://` 旧写法即可脱离包依赖）——监视器会卸载插件并恢复 deepseek 原状。
 
 **注意**：不要同时用动态 Cordis 插件注册同名 provider（id 冲突会 `WEB_DUPLICATE_PROVIDER`）；本会话验证用的动态插件已停止。
 
+## GUI 配置（设置 → 插件 → 可配置）
+
+插件在宿主 `settings` seam 注册 `web-search` 命名空间（持久化到 `~/.dsh/settings.yaml`），并在 DSH Web GUI 的**设置 → 插件 → 可配置** tab 渲染一张「Web 搜索链」卡片，可编辑：
+
+| 字段 | 说明 |
+| --- | --- |
+| 后端顺序 | 逗号分隔的回退链（未知项被忽略） |
+| SearXNG 实例地址 | 自建 SearXNG JSON API 地址 |
+| Brave API Key / Tavily API Key | secret 字段，不回显；留空保存 = 清除该覆盖 |
+| opencli 可执行文件 / 语言 | opencli 后端参数 |
+| opencli 超时 / HTTP 超时 | 1000–120000 ms，越界不保存 |
+
+配置分层（每次搜索实时合并）：
+
+```
+代码默认值 < ~/.dsh/web-search.json < GUI 用户层（settings.yaml）
+```
+
+GUI 里留空保存某字段 = 删除该字段的用户覆盖，回退到 `web-search.json` 的值；两个来源都没有就用代码默认值。改动立即生效、无需重启。
+
 ## 配置（可选）：`~/.dsh/web-search.json`
 
-镜像 pi-web-access 的 `~/.pi/web-search.json` 惯例，每次搜索时惰性重读，全部字段可省略：
+镜像 pi-web-access 的 `~/.pi/web-search.json` 惯例，每次搜索时惰性重读；它是分层配置的**中间层**（代码默认值 < 本文件 < GUI 设置），GUI 里留空保存的字段会回退到这里：
 
 ```json
 {
@@ -73,17 +100,20 @@
 
 ```
 web-search/
-├── package.json          # 零依赖, "type": "module"
+├── package.json          # 零依赖, "type": "module"; exports["./client"] + dsh.client 声明
 ├── src/
 │   ├── index.js          # Cordis 插件入口：ctx.get('web') 注册链式 provider
 │   ├── chain.js          # web-search-multi：回退链 + 去重 + 截断 + abort
 │   ├── config.js         # ~/.dsh/web-search.json 读取/合并/校验
+│   ├── web-search-settings.js  # settings seam 注册 web-search 命名空间（GUI 卡片的数据源）
+│   ├── host-deps.js      # 从 dsh profile node_modules 解析 @deepseek-ai/* 宿主包
+│   ├── client.js         # 浏览器半身：设置→插件→可配置 卡片的 hand-written bundle
 │   ├── io-node.js        # 原生 fetch + child_process 的 io 适配
 │   ├── html.js           # 实体解码/去标签/Bing 重定向 base64url 解码
 │   ├── parse-bing.js     # Bing SERP 解析（真实 fixture 驱动）
 │   ├── parse-ddg.js      # DDG HTML 解析
 │   └── backends/         # opencli / bing / ddg / searxng / brave / tavily
-└── tests/                # node:test，15 个用例 + fixtures + smoke.mjs
+└── tests/                # node:test，用例 + fixtures + smoke.mjs
 ```
 
 ```bash
