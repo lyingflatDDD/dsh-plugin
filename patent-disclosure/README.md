@@ -73,14 +73,15 @@ patent-disclosure/
 ├── scripts/
 │   └── md2docx.py        # 固定的交底书 Markdown -> docx 转换脚本（python-docx）
 └── tests/
-    ├── smoke.mjs         # node:test：插件形状 + 注册对象 + 正文锚点
-    ├── test_md2docx.py   # unittest：转换脚本（标题/加粗/表格/图片/代码块/占位）
-    └── fixtures/         # sample.md + fig.png 转换样例
+    ├── smoke.mjs         # node:test：插件形状 + 注册对象 + 正文锚点 + 脚本存在性
+    └── fixtures/         # sample.md + fig.png 转换样例（手工验证 md2docx 用）
 ```
 
 ```bash
 node --test tests/smoke.mjs          # 或 npm test
-python3 tests/test_md2docx.py        # 转换脚本测试（需 python-docx）
+
+# md2docx.py 手工验证（会写 /tmp 下临时 docx 并读回检查）：
+# python3 scripts/md2docx.py tests/fixtures/sample.md /tmp/sample.docx
 ```
 
 源码改动（含 skill.md）需重启 `dsh web` 再开新会话验证（同本仓库其他插件的约定）。
