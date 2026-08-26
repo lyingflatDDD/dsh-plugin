@@ -1,0 +1,24 @@
+{
+  "name": "dsh-plan-window",
+  "version": "0.1.0",
+  "description": "Plan review floating window for DeepSeek Harness: turns the exit_plan_mode takeover card into a draggable, resizable free window with select-to-comment review feedback",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node tests/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
