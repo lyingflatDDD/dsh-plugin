@@ -28,8 +28,12 @@ function loadClientBundle() {
     useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
     useEffect: () => {},
   }
+  const reactDomStub = {
+    createPortal: (el, container) => ({ stub: 'portal', el, container }),
+  }
   const require_ = (id) => {
     if (id === 'react') return reactStub
+    if (id === 'react-dom') return reactDomStub
     throw new Error(`unexpected require: ${id}`)
   }
   return loaded.factory(require_)
@@ -195,6 +199,22 @@ test('initialGeo centers a viewport-adaptive default', () => {
   assert.deepEqual(small, clampGeo(small, 800, 600))
   // narrow viewport: MIN_W/MIN_H floor kicks in before clamping
   assert.deepEqual(initialGeo(520, 450), { x: 20, y: 15, w: 480, h: 420 })
+})
+
+// Regression: the shell.overlay container is a z-index:20 stacking context
+// that caps everything rendered inside it below the host's menus (100),
+// modals (1000) and toasts (1100). The window must escape via a
+// document.body portal and stack above the app's top layer (1100).
+test('window renders topmost via a body portal', () => {
+  const bundle = loadClientBundle()
+  // the bundle pulls createPortal from react-dom (stubbed above; an
+  // unexpected require would have thrown during evaluation)
+  assert.match(clientSrc, /require\('react-dom'\)/)
+  assert.match(clientSrc, /createPortal\(frame,\s*document\.body\)/)
+  const { CSS } = bundle.__testables
+  const m = /\.plnwin-window\{[^}]*z-index:(\d+)/.exec(CSS)
+  assert.ok(m, '.plnwin-window rule must set a z-index')
+  assert.ok(Number(m[1]) > 1100, `z-index ${m[1]} must beat the host top layer (1100)`)
 })
 
 test('host half and package.json shape', async () => {

@@ -13,7 +13,11 @@
  *    degrades to a decline, so the shipped card still catches the wait.
  *  - `shell.overlay` list entry renders the window: drag by header, resize
  *    by the bottom-right handle, close/reopen from the composer strip.
- *    First open centers a viewport-adaptive DEF_W x DEF_H default; geometry
+ *    The frame is ported to document.body at z-index 1200 — above the
+ *    host's modal (1000) and toast (1100) layers and any sibling plugin
+ *    overlay — because the overlay container itself is a z-index:20
+ *    stacking context that caps anything rendered inside it. First open
+ *    centers a viewport-adaptive DEF_W x DEF_H default; geometry
  *    is always clamped to the viewport (at least VIS_W x VIS_H stays
  *    visible, so it can never be dragged off-screen) and survives across
  *    plan re-submissions; the comment list resets per carrier key.
@@ -36,6 +40,15 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
     var React = require('react')
+
+    /* Top-layer rendering: the shell.overlay container is itself a
+     * z-index:20 stacking context, so anything rendered inside it is capped
+     * below the host's menus (100), modals/lightboxes (1000) and toasts
+     * (1100). The host's own top-layer UI escapes via
+     * createPortal(..., document.body) — mirror that, with an in-layer
+     * fallback when react-dom is unavailable. */
+    var createPortal
+    try { createPortal = require('react-dom').createPortal } catch (e) { /* keep undefined */ }
 
     /** Locale dictionary namespace owned by this bundle. */
     var NS = 'dsh.plan-window'
@@ -410,12 +423,20 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** Overlay entry: renders the window while a review is pending and open. */
+    /**
+     * Overlay entry: renders the window while a review is pending and open.
+     * The frame is ported to document.body whenever possible so it stacks
+     * above every other plugin/overlay (the overlay layer's own z-index
+     * caps anything rendered inside it); without react-dom it falls back
+     * to ordinary in-layer rendering.
+     */
     function PlanWindow(props) {
       var force = React.useState(0)[1]
       React.useEffect(function () { return subscribe(function () { force(function (v) { return v + 1 }) }) }, [])
       if (store.wait === null || store.review === null || !store.open) return null
-      return React.createElement(WindowFrame, { key: store.wait.key, wait: store.wait, review: store.review })
+      var frame = React.createElement(WindowFrame, { key: store.wait.key, wait: store.wait, review: store.review })
+      if (typeof createPortal !== 'function') return frame
+      try { return createPortal(frame, document.body) } catch (e) { return frame }
     }
 
     /** The floating window: markdown body + comment rail + decision row. */
@@ -689,7 +710,7 @@ window.__ModuleLoader__.load({
       '.plnwin-strip-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.plnwin-strip-btn{margin-left:auto;flex:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer}',
       '.plnwin-strip-btn:hover{border-color:var(--dsw-alias-brand-primary)}',
-      '.plnwin-window{position:fixed;z-index:80;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.3);overflow:hidden;font-size:14px;color:var(--dsw-alias-label-primary)}',
+      '.plnwin-window{position:fixed;z-index:1200;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.3);overflow:hidden;font-size:14px;color:var(--dsw-alias-label-primary)}',
       '.plnwin-header{display:flex;align-items:center;gap:10px;padding:10px 12px 10px 16px;background:var(--dsw-alias-bg-layer-2);border-bottom:1px solid var(--dsw-alias-border-l1);cursor:grab;user-select:none;touch-action:none;flex:none}',
       '.plnwin-header:active{cursor:grabbing}',
       '.plnwin-title-dot{width:9px;height:9px;border-radius:50%;background:var(--dsw-alias-brand-primary);flex:none}',
@@ -790,7 +811,7 @@ window.__ModuleLoader__.load({
     exports.__testables = {
       asPlanReview: asPlanReview, parseBlocks: parseBlocks, formatFeedback: formatFeedback,
       approvePayload: approvePayload, keepPlanningPayload: keepPlanningPayload, STR: STR,
-      clampGeo: clampGeo, initialGeo: initialGeo,
+      clampGeo: clampGeo, initialGeo: initialGeo, CSS: CSS,
     }
     return module.exports
   },

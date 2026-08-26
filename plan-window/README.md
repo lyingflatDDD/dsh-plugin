@@ -8,7 +8,7 @@ DeepSeek Harness（DSH）计划模式的**浮动评审窗口**：把 `exit_plan_
 
 | 能力 | 说明 |
 | --- | --- |
-| 自由窗口 | 注册在 `shell.overlay`（框架级浮动层）：标题栏拖拽（pointer capture）、右下角缩放、关闭/重开；首次打开按视口居中（默认 920×720，随视口自适应缩小）；位置与尺寸始终钳制在视口内（至少保留 160×120 可见可抓取，不会拖出屏幕丢失），跨多次计划提交保留 |
+| 自由窗口 | 注册在 `shell.overlay`（框架级浮动层），但窗口本体经 `createPortal` 挂到 `document.body`、`z-index:1200`——盖过宿主 Modal（1000）/Toast（1100）及其他插件浮层（overlay 容器自身是 z-index:20 的 stacking context，不逃出会被封顶）：标题栏拖拽（pointer capture）、右下角缩放、关闭/重开；首次打开按视口居中（默认 920×720，随视口自适应缩小）；位置与尺寸始终钳制在视口内（至少保留 160×120 可见可抓取，不会拖出屏幕丢失），跨多次计划提交保留 |
 | 划选评论 | 在计划正文划选文字松开 → 右栏生成带引用的评论卡（Selection API 不可用时退化为段落悬停 “＋”）；评论可编辑、删除；已评论段落左侧高亮 |
 | 评论驱动修订 | 「提交评论并继续规划」以 `['Keep planning'] + custom(全部评论)` 回答评审问题 —— `exit_plan_mode` 的工具结果会携带这些反馈失败返回，模型据此修订并重新提交，窗口自动刷新、评论清空 |
 | 批准 / 对话 | 「批准」回答 `['Approve']`（正常退出计划模式）；「改为对话」以 `ASK_CANCELLED` 取消等待，归还输入区 |
@@ -17,7 +17,7 @@ DeepSeek Harness（DSH）计划模式的**浮动评审窗口**：把 `exit_plan_
 ## 工作原理
 
 - `conversation.composer` 链条目（priority `-1`，早于内置提问卡）：selector 只匹配通过 plan-review 收窄检查的 `PendingWait`（单问题、`intent.kind === 'plan-review'`、计划在 `detail`、二元单选）。当选后输入区渲染一条状态条（含「显示/隐藏窗口」）。
-- `shell.overlay` list 条目 `plan-window`：渲染浮动窗口本体，无评审挂起时返回 `null`。
+- `shell.overlay` list 条目 `plan-window`：渲染浮动窗口本体（经 `createPortal` 挂 `document.body`，`z-index:1200`，宿主/插件浮层之上），无评审挂起时返回 `null`。
 - 回答编码完全镜像内置 `PendingQuestion`：`respond({ok:true, value:{sessionId, answer:{answers:[{id, selected, custom}]}}})`；取消为 `respond({ok:false, error:{code:'cancelled', ...}})`。每次检查 `receipt.accepted`，被拒时解锁按钮并显示原因。
 - 纯 Client 插件：宿主半边 `src/index.js` 为 no-op（组合行有包可挂即可，同时让 client-modules 发现并伺服浏览器半边）。
 
