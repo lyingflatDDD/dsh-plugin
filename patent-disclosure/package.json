@@ -1,0 +1,18 @@
+{
+  "name": "dsh-patent-disclosure",
+  "version": "0.1.0",
+  "description": "技术交底书预设包：为 patent-disclosure 预设注册 tech-disclosure 写作技能（模板 + 方法论 + 流程图生成规范），宿主半边 only，零依赖",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
