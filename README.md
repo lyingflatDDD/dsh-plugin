@@ -33,7 +33,7 @@ dsh plugin --profile web add link:./<plugin-name>
 
 ## 开发约定
 
-- **零依赖**：不引入 npm 运行时依赖；浏览器半身（`src/client.js`）为手写 bundle。
+- **依赖**：不强制零依赖——后续开发能用 npm 包就直接引入；存量三插件保持零依赖现状，浏览器半身（`src/client.js`）仍为手写 bundle。
 - **测试**：各插件目录下 `npm test`（node:test）；web-search 另有真实后端冒烟 `node tests/smoke.mjs "query"`。
 - **源码改动需重启 `dsh web`**：patch 文件热重载只影响组合结构；web bundle 禁用模块级 HMR，ESM 模块缓存不会自动刷新。
 - **回滚**：删除 `~/.dsh/cordis.patch.yml` 中对应 insert 行即可，watcher 自动卸载。
