@@ -37,6 +37,10 @@ export function apply(ctx) {
   const content = readFileSync(join(here, 'skill.md'), 'utf8')
   ctx.effect(() => ctx.skills.register({
     name: SKILL_NAME,
+    // register() 只给 invocation/provider 兜底；source 是必填项，缺失时
+    // 注册不报错，但 skill 工具加载正文时 validateDefinition() 会抛
+    // `loaded skill "..." source must be a string`。runtime 注册固定 'runtime'。
+    source: 'runtime',
     description:
       '撰写技术交底书：从代码仓库或结构化访谈中提炼发明方案，按公司六段模板产出草稿，'
       + '自动编写并运行流程图实现代码，产出供专利代理人使用。',

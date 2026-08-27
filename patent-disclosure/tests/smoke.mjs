@@ -36,6 +36,7 @@ test('apply registers exactly one well-formed tech-disclosure skill', () => {
   assert.equal(registrations.length, 1)
   const [skill] = registrations
   assert.equal(skill.name, 'tech-disclosure')
+  assert.equal(skill.source, 'runtime', 'source must be a string or skills.get() rejects the skill')
   assert.ok(skill.description.length > 0, 'description must be non-empty')
   assert.ok(skill.whenToUse.length > 0, 'whenToUse must be non-empty')
   assert.ok(skill.content.length > 1000, 'skill body must be substantial')
