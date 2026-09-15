@@ -1,0 +1,24 @@
+{
+  "name": "dsh-ws-group-sort",
+  "version": "0.1.0",
+  "description": "Workspace-group recency sorting for DeepSeek Harness: while the sidebar session list is grouped by workspace and ordered by latest activity, the group holding the newest conversation is visually promoted to the top",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node tests/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
