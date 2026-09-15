@@ -9,10 +9,11 @@
 | [`plan-window/`](./plan-window) | **计划评审浮动窗口**：把 `exit_plan_mode` 的固定接管卡替换为可拖拽、可缩放的自由浮动窗口，支持划选计划文字添加评论，一键把全部评论回传给模型修订。纯 Client 插件。 |
 | [`web-search/`](./web-search) | **多后端 web 搜索链**（pi-web-access 风格）：在 `ctx.web` seam 注册 `web-search-multi` provider，按序回退 opencli/Google → Bing → DuckDuckGo → SearXNG → Brave → Tavily；带 GUI 设置卡片（设置 → 插件 → 可配置），密钥不回显。 |
 | [`patent-disclosure/`](./patent-disclosure) | **技术交底书预设包**：为「技术交底书」agent 预设注册 `tech-disclosure` 写作技能（公司六段交底书模板、预审教训沉淀的写作规则、代码仓库挖掘与结构化访谈两套输入流程、matplotlib 流程图自动生成规范、交稿自查清单），附固定的 md 转 docx 脚本。纯 Host 插件（无浏览器 UI），走预设组合行挂载（不用 `cordis.patch.yml`）。 |
+| [`patent-skill/`](./patent-skill) | **上游中国专利技能适配包**：把 [handsomestWei/patent-disclosure-skill](https://github.com/handsomestWei/patent-disclosure-skill)（交底/申请文件/案卷/著录检索/通俗解读/专利地图/审查答复/政策简报，含 mermaid 出图、docx 定稿、CNIPA 检索等 Python 工具链）vendor 进包内，为同一预设注册 `patent-disclosure-skill` 路由技能（发明交底仍默认 `tech-disclosure`）。纯 Host 插件，走预设组合行挂载。 |
 
 ## 通用安装方式
 
-三个插件的第一步相同：先装进 web profile（plan-window / web-search 借此让浏览器半身被 client-modules 发现；patent-disclosure 无浏览器半身，目的是 pnpm link 后让 `dsh-patent-disclosure` 能按裸包名被预设组合行解析）：
+各插件的第一步相同：先装进 web profile（plan-window / web-search 借此让浏览器半身被 client-modules 发现；patent-disclosure / patent-skill 无浏览器半身，目的是 pnpm link 后让裸包名能被预设组合行解析）：
 
 ```bash
 cd ~/code/dsh-plugin

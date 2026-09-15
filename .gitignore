@@ -1,6 +1,9 @@
 # dependencies
 node_modules/
 
+# vendored upstream snapshots (keep their own .git; update via git pull)
+patent-skill/vendor/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

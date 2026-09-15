@@ -1,0 +1,18 @@
+{
+  "name": "dsh-patent-skill",
+  "version": "0.1.0",
+  "description": "上游专利技能适配包：把 handsomestWei/patent-disclosure-skill（中国专利 .skill：交底/申请文件/案卷/检索/解读/地图/审查答复/政策简报）以 runtime skill 形式注册进「技术交底书」预设，宿主半边 only，零 npm 依赖",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
