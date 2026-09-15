@@ -17,10 +17,11 @@ DeepSeek Harness（DSH）计划模式的**浮动评审窗口**：把 `exit_plan_
 
 ## 工作原理
 
-- `conversation.composer` 链条目（priority `-1`，早于内置提问卡）：selector 只匹配通过 plan-review 收窄检查的 `PendingWait`（单问题、`intent.kind === 'plan-review'`、计划在 `detail`、二元单选）。当选后输入区渲染一条状态条（含「显示/隐藏窗口」）。当选时把 carrier 发布进共享 store，并**按 carrier key 记忆开合状态**：窗口只在出现新 key（模型重新提交的计划）时自动弹出；条目随会话切换重挂载时，沿用用户对同一评审的收起选择（评论草稿同理保留）。
+- `conversation.composer` 链条目（priority `-1`，早于内置提问卡）：链条 owner props 携带当前会话唯一生效的 `pendingInteraction`（`ComposerChainProps`），selector 只在它的域判别值为 `plan-review`（内置 `PendingQuestion` 经 `planReviewOf` 收窄）且自身对 `questions` 批次的收窄检查也通过时认领（单问题、`intent.kind === 'plan-review'`、计划在 `detail`、二元单选）；普通提问卡、审批卡不受影响。当选后输入区渲染一条状态条（含「显示/隐藏窗口」）。当选时把 carrier 发布进共享 store，并**按 carrier key 记忆开合状态**：窗口只在出现新 key（模型重新提交的计划）时自动弹出；条目随会话切换重挂载时，沿用用户对同一评审的收起选择（评论草稿同理保留）。
 - `shell.overlay` list 条目 `plan-window`：渲染浮动窗口本体（经 `createPortal` 挂 `document.body`，`z-index:1200`，宿主/插件浮层之上），无评审挂起时返回 `null`。
-- 回答编码完全镜像内置 `PendingQuestion`：`respond({ok:true, value:{sessionId, answer:{answers:[{id, selected, custom}]}}})`；取消（「改为对话」与窗口「×」）为 `respond({ok:false, error:{code:'cancelled', ...}})`。每次检查 `receipt.accepted`，被拒时解锁按钮并显示原因。
+- 回答编码完全镜像内置 `PendingQuestion` 动词：批准/继续规划调用 `wait.answer({answers:[{id, selected, custom}]})`（单选答案要么 `selected` 要么非空 `custom`，继续规划发空 `selected` + 全部评文本作 `custom`，`exit_plan_mode` 宿主以 `selected.length !== 1` 读作「继续规划」并携带反馈）；取消（「改为对话」与窗口「×」）为 `wait.cancel()`（等待以 `ASK_CANCELLED` 结算）。动词返回 Promise，被拒时解锁按钮并显示原因。
 - 纯 Client 插件：宿主半边 `src/index.js` 为 no-op（组合行有包可挂即可，同时让 client-modules 发现并伺服浏览器半边）。
+- 兼容性：适配 dsh 「pending interactions out of Session state」重构后的组合链（`pendingInteraction` 单 carrier / `PendingQuestion.answer()`/`cancel()`）；旧版（`props.interactions` + `wait.respond()` 信封）不再支持。
 
 ## 安装
 

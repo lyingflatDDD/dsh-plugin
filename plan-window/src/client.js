@@ -7,13 +7,17 @@
  * PlanReviewPanel, composer chain priority 0) with a free floating window:
  *
  *  - `conversation.composer` chain entry at priority -1 claims ONLY
- *    plan-review question waits (single question, `intent.kind ===
- *    'plan-review'`, plan in `detail`, binary options); every other wait —
- *    generic questions, approvals — falls through untouched. A crash here
- *    degrades to a decline, so the shipped card still catches the wait.
+ *    plan-review question carriers: the chain's owner props expose the
+ *    session's single effective `pendingInteraction` (a SessionPendingInteraction),
+ *    and the selector takes it only when its domain discriminator is
+ *    'plan-review' and its question batch narrows like the shipped
+ *    planReviewOf (single question, `intent.kind === 'plan-review'`, plan
+ *    in `detail`, binary options); every other interaction — generic
+ *    questions, approvals — falls through untouched. A crash here degrades
+ *    to a decline, so the shipped card still catches the wait.
  *  - `shell.overlay` list entry renders the window: drag by header, resize
  *    by the bottom-right handle. The header "x" DISMISSES the review - the
- *    same wire encoding as "Chat instead" (ASK_CANCELLED) - so the wait
+ *    same cancel verb as "Chat instead" (ASK_CANCELLED) - so the wait
  *    settles, the composer chain falls back to the input bar and the
  *    session is back in conversation mode: a close that actually closes.
  *    Hide/reopen from the composer strip stays non-destructive, and a hide
@@ -31,11 +35,12 @@
  *    plan re-submissions; the comment list resets per carrier key.
  *  - Comments: select text in the plan body (or hover a block and press
  *    "+") to add a quoted comment card. "Send comments & keep planning"
- *    answers the review question with `['Keep planning'] + custom`
- *    (the exit_plan_mode host reads that as revision feedback); Approve
- *    answers `['Approve']` (plan mode exits); "Chat instead" - and the
- *    window's "x" - cancels the wait (ASK_CANCELLED) and returns the
- *    composer.
+ *    answers the review with an empty `selected` plus the feedback text in
+ *    `custom` (the exit_plan_mode host reads `selected.length !== 1` as
+ *    keep-planning with `custom` as the revision feedback); Approve answers
+ *    `selected: ['Approve']` (plan mode exits); "Chat instead" - and the
+ *    window's "x" - cancels the wait (`wait.cancel()` settles it
+ *    ASK_CANCELLED) and returns the composer.
  *
  * Hand-written bundle (no build step): plain factory + React.createElement.
  * @module dsh-plan-window/client
@@ -120,11 +125,11 @@ window.__ModuleLoader__.load({
     /**
      * Shared package store: the composer strip writes the elected carrier
      * here; the overlay window reads it. One pending review at a time (the
-     * runtime dispatches one composer wait per session; the UI shows the
-     * current session's review).
+     * runtime exposes one effective pending interaction per session; the UI
+     * shows the current session's review).
      */
     var store = {
-      wait: null,        // elected PendingWait carrier
+      wait: null,        // elected plan-review PendingQuestion carrier
       review: null,     // { id, question, plan, approveLabel, declineLabel }
       open: true,
       openKey: null,    // carrier key store.open belongs to: auto-open only when the key CHANGES (new review), so a session-switch remount keeps a user-hidden window hidden
@@ -141,15 +146,14 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Narrow a question wait to a renderable plan review (runtime mirror of
-     * ui-user-questions' `planReviewOf`; returns null when the generic flow
-     * should own the request).
+     * Narrow a plan-review question carrier to a renderable review
+     * (runtime mirror of ui-user-questions' `planReviewOf`, reading the
+     * PendingQuestion carrier's own `questions` batch; returns null when
+     * the generic flow should own the request).
      */
     var asPlanReview = function (wait) {
       try {
-        var payload = wait !== null && wait !== undefined ? wait.payload : undefined
-        if (payload === null || payload === undefined) return null
-        var questions = payload.questions
+        var questions = wait !== null && wait !== undefined ? wait.questions : undefined
         if (!Array.isArray(questions) || questions.length !== 1) return null
         var q = questions[0]
         if (q === null || q === undefined) return null
@@ -172,14 +176,18 @@ window.__ModuleLoader__.load({
       } catch (e) { return null }
     }
 
-    /** Chain selector: claim the composer ONLY for a plan-review wait. */
+    /**
+     * Chain selector: claim the composer ONLY for a plan-review carrier.
+     * The composer chain's owner props (ComposerChainProps) expose the
+     * session's single effective `pendingInteraction` (undefined without a
+     * selected session); claim it only when its domain discriminator is
+     * 'plan-review' (a PendingQuestion the shipped flow narrowed via
+     * planReviewOf) and our own narrowing of its question batch agrees.
+     */
     var selectPlanReview = function (props) {
-      var list = props !== null && props !== undefined ? props.interactions : undefined
-      if (list === null || list === undefined || typeof list.find !== 'function') return null
-      return list.find(function (item) {
-        if (item === null || item === undefined || item.kind !== 'question') return false
-        return asPlanReview(item) !== null
-      }) || null
+      var item = props !== null && props !== undefined ? props.pendingInteraction : undefined
+      if (item === null || item === undefined || item.kind !== 'plan-review') return null
+      return asPlanReview(item) !== null ? item : null
     }
 
     /**
@@ -352,44 +360,19 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Wire payloads for the two review decisions (test surface). The
-     * plan-review question is SINGLE-select, and apiproxy's
-     * `matchesQuestions` enforces XOR: a single-select answer item may carry
-     * `selected` or non-empty `custom`, never both (`bad-response`
-     * otherwise). So keep-planning sends an EMPTY selected array plus the
-     * feedback text — the exit_plan_mode host reads `selected.length !== 1`
-     * as keep-planning with `custom` as the feedback either way.
+     * Answer batches for the two review decisions (test surface). The
+     * plan-review question is SINGLE-select, and the shipped answer flow
+     * keeps a single-select answer item to `selected` or a non-empty
+     * `custom`, never both. So keep-planning sends an EMPTY selected array
+     * plus the feedback text — the exit_plan_mode host reads
+     * `selected.length !== 1` as keep-planning with `custom` as the
+     * feedback either way.
      */
-    var approvePayload = function (sessionId, questionId, approveLabel) {
-      return {
-        ok: true,
-        value: {
-          sessionId: sessionId,
-          answer: { answers: [{ id: questionId, selected: [approveLabel] }] },
-        },
-      }
+    var approveAnswer = function (questionId, approveLabel) {
+      return { answers: [{ id: questionId, selected: [approveLabel] }] }
     }
-    var keepPlanningPayload = function (sessionId, questionId, feedback) {
-      return {
-        ok: true,
-        value: {
-          sessionId: sessionId,
-          answer: { answers: [{ id: questionId, selected: [], custom: feedback }] },
-        },
-      }
-    }
-
-    /**
-     * Dismiss (cancel) payload: the exact wire encoding of the shipped
-     * PendingQuestion.cancel. Settles the review wait as ASK_CANCELLED -
-     * the pending list drops the carrier, the composer chain falls back to
-     * the input bar and the session is back in conversation mode.
-     */
-    var dismissPayload = function () {
-      return {
-        ok: false,
-        error: { code: 'cancelled', message: 'the user closed this question request', details: {} },
-      }
+    var keepPlanningAnswer = function (questionId, feedback) {
+      return { answers: [{ id: questionId, selected: [], custom: feedback }] }
     }
 
     // ---------- geometry (centered default + viewport clamping) ----------
@@ -608,42 +591,52 @@ window.__ModuleLoader__.load({
         store.geo = clampGeo(geo, vp.vw, vp.vh)
       }
 
-      // ----- decisions (mirror of the shipped PendingQuestion encoding) -----
-      var send = function (payload) {
-        if (wait === null || wait === undefined || typeof wait.respond !== 'function') {
+      // ----- decisions (mirror of the shipped PendingQuestion verbs) -----
+      /**
+       * Run one carrier verb (answer/cancel) with the panel's busy/error
+       * contract: buttons freeze for the flight, and only a rejection
+       * (e.g. the wait already settled elsewhere) re-enables them and
+       * shows the reason. A settled wait drops the pending interaction,
+       * unmounts this window, and the composer returns to the input bar.
+       */
+      var settleCall = function (invoke) {
+        if (wait === null || wait === undefined || typeof wait.answer !== 'function'
+          || typeof wait.cancel !== 'function') {
           setError('question carrier unavailable')
           return
         }
         setBusy(true)
         setError(null)
         var p
-        try { p = Promise.resolve(wait.respond(payload)) } catch (e) {
+        try { p = Promise.resolve(invoke()) } catch (e) {
           setBusy(false)
           setError(String(e && e.message ? e.message : e))
           return
         }
-        p.then(function (receipt) {
-          if (receipt === null || receipt === undefined || receipt.accepted !== true) {
-            var reason = receipt !== null && receipt !== undefined && receipt.reason
-              ? String(receipt.reason) : 'response rejected'
-            setBusy(false)
-            setError(reason)
-          }
+        p.then(function () {
+          // settled: the session drops the carrier and this window
+          // unmounts; stay busy so repeated clicks cannot resubmit
         }).catch(function (cause) {
           setBusy(false)
           setError(cause instanceof Error ? cause.message : String(cause))
         })
       }
       var approve = function () {
-        send(approvePayload(wait.sessionId, review.id, review.approveLabel))
+        settleCall(function () { return wait.answer(approveAnswer(review.id, review.approveLabel)) })
       }
       var keepPlanning = function () {
         if (!hasText()) { setError(t('emptyComment')); return }
-        send(keepPlanningPayload(wait.sessionId, review.id, formatFeedback(comments, L)))
+        settleCall(function () { return wait.answer(keepPlanningAnswer(review.id, formatFeedback(comments, L))) })
       }
-      /** Dismiss the review (footer "Chat instead" and the header "x"). */
+      /**
+       * Dismiss the review (footer "Chat instead" and the header "x"):
+       * wait.cancel() is the shipped PendingQuestion verb - it settles the
+       * review wait as ASK_CANCELLED, the pending interaction drops the
+       * carrier, the composer chain falls back to the input bar and the
+       * session is back in conversation mode.
+       */
       var dismiss = function () {
-        send(dismissPayload())
+        settleCall(function () { return wait.cancel() })
       }
 
       // ----- render -----
@@ -810,7 +803,11 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       try {
         var snap = ctx.locale.getLocale()
-        var id = snap !== null && snap !== undefined ? (snap.id || snap.locale || snap.language) : undefined
+        // LocaleSnapshot names the active locale `active` (older builds
+        // exposed id/locale/language; keep them as graceful fallbacks).
+        var id = snap !== null && snap !== undefined
+          ? (snap.active || snap.id || snap.locale || snap.language)
+          : undefined
         if (typeof id === 'string' && id.slice(0, 2).toLowerCase() === 'en') lang = 'en'
       } catch (e) { /* keep zh */ }
 
@@ -852,9 +849,10 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     // Pure helpers exposed for tests only (not part of the plugin contract).
     exports.__testables = {
-      asPlanReview: asPlanReview, parseBlocks: parseBlocks, formatFeedback: formatFeedback,
-      approvePayload: approvePayload, keepPlanningPayload: keepPlanningPayload,
-      dismissPayload: dismissPayload, electReview: electReview, STR: STR,
+      asPlanReview: asPlanReview, selectPlanReview: selectPlanReview,
+      parseBlocks: parseBlocks, formatFeedback: formatFeedback,
+      approveAnswer: approveAnswer, keepPlanningAnswer: keepPlanningAnswer,
+      electReview: electReview, STR: STR,
       clampGeo: clampGeo, initialGeo: initialGeo, CSS: CSS,
       WindowFrame: WindowFrame, store: store,
     }

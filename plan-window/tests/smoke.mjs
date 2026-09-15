@@ -39,7 +39,8 @@ function loadClientBundle() {
   return loaded.factory(require_)
 }
 
-const wait = (questions) => ({ kind: 'question', key: 'k1', sessionId: 's1', payload: { questions } })
+/** A plan-review PendingQuestion carrier (kind set by the shipped planReviewOf). */
+const wait = (questions, kind = 'plan-review') => ({ kind, key: 'k1', sessionId: 's1', questions })
 
 const planQuestion = (overrides = {}) => ({
   id: 'plan-review',
@@ -72,7 +73,7 @@ test('asPlanReview narrows exactly the plan-review shape', () => {
   })
   // not a question carrier
   assert.equal(asPlanReview(null), null)
-  assert.equal(asPlanReview({ payload: {} }), null)
+  assert.equal(asPlanReview({ questions: [] }), null)
   // two questions, no intent, no detail, multiSelect, 3 options, approve mismatch
   assert.equal(asPlanReview(wait([planQuestion(), planQuestion()])), null)
   assert.equal(asPlanReview(wait([planQuestion({ intent: undefined })])), null)
@@ -136,39 +137,39 @@ test('formatFeedback renders the numbered quoted list', () => {
   )
 })
 
-// Regression: the plan-review question is single-select, and apiproxy's
-// matchesQuestions rejects an answer item carrying BOTH selected and custom
-// as `bad-response`. Keep-planning must send selected: [] + custom.
-test('decision payloads satisfy the single-select XOR wire rule', () => {
-  const { approvePayload, keepPlanningPayload } = loadClientBundle().__testables
-  const approve = approvePayload('s1', 'plan-review', 'Approve')
-  assert.deepEqual(approve, {
-    ok: true,
-    value: { sessionId: 's1', answer: { answers: [{ id: 'plan-review', selected: ['Approve'] }] } },
-  })
-  assert.equal(approve.value.answer.answers[0].custom, undefined)
+// The composer chain's owner props (ComposerChainProps) carry the session's
+// single effective `pendingInteraction` (undefined without a session). The
+// selector must claim it only for a plan-review question carrier and stay
+// silent for generic questions, approvals, and empty chains.
+test('selectPlanReview claims only the plan-review pendingInteraction', () => {
+  const { selectPlanReview } = loadClientBundle().__testables
+  const carrier = wait([planQuestion()])
+  assert.equal(selectPlanReview({ sessionId: 's1', session: undefined, pendingInteraction: carrier }), carrier)
+  assert.equal(selectPlanReview({ pendingInteraction: undefined }), null)
+  assert.equal(selectPlanReview(undefined), null)
+  // generic question carrier (kind 'question') is not claimed
+  assert.equal(selectPlanReview({ pendingInteraction: wait([planQuestion({ intent: undefined })], 'question') }), null)
+  // plan-review discriminator without a narrowable batch is not claimed
+  assert.equal(selectPlanReview({ pendingInteraction: wait([], 'plan-review') }), null)
+  // other pending-interaction domains (e.g. approvals) are not claimed
+  assert.equal(selectPlanReview({ pendingInteraction: { kind: 'approval', key: 'a1' } }), null)
+})
 
-  const keep = keepPlanningPayload('s1', 'plan-review', '计划评审意见（共 1 条）：\n1. …')
-  const keepItem = keep.value.answer.answers[0]
-  assert.equal(keep.ok, true)
-  assert.equal(keep.value.sessionId, 's1')
-  assert.equal(keepItem.id, 'plan-review')
+// Regression: the plan-review question is single-select, and the shipped
+// answer flow keeps a single-select answer item to `selected` or a non-empty
+// `custom`, never both. Keep-planning must send selected: [] + custom.
+test('decision answers satisfy the single-select XOR rule', () => {
+  const { approveAnswer, keepPlanningAnswer } = loadClientBundle().__testables
+  const approve = approveAnswer('plan-review', 'Approve')
+  assert.deepEqual(approve, { answers: [{ id: 'plan-review', selected: ['Approve'] }] })
+  assert.equal(approve.answers[0].custom, undefined)
+
+  const keep = keepPlanningAnswer('plan-review', '计划评审意见（共 1 条）：\n1. …')
+  assert.deepEqual(keep.answers.map(({ id }) => id), ['plan-review'])
+  const keepItem = keep.answers[0]
   assert.deepEqual(keepItem.selected, [])
   assert.equal(typeof keepItem.custom, 'string')
   assert.ok(keepItem.custom.trim() !== '')
-})
-
-// Regression (close "did not actually close"): dismissing the review must
-// use the shipped PendingQuestion.cancel encoding - ok:false + cancelled
-// error - so the host settles the wait (ASK_CANCELLED), the pending list
-// drops the carrier and the composer chain falls back to the input bar
-// (conversation mode).
-test('dismissPayload mirrors the shipped cancel encoding', () => {
-  const { dismissPayload } = loadClientBundle().__testables
-  assert.deepEqual(dismissPayload(), {
-    ok: false,
-    error: { code: 'cancelled', message: 'the user closed this question request', details: {} },
-  })
 })
 
 // Regression (window popped back after switching sessions): the composer
@@ -209,7 +210,7 @@ test('electReview auto-opens only a new carrier, keeping a user-hidden window hi
 
   // a non-review carrier is declined without touching the store
   const untouched = freshStore()
-  assert.equal(electReview(untouched, { kind: 'question', key: 'x', payload: { questions: [] } }), null)
+  assert.equal(electReview(untouched, { kind: 'question', key: 'x', questions: [] }), null)
   assert.equal(untouched.wait, null)
   assert.equal(untouched.openKey, null)
 })
@@ -229,20 +230,29 @@ function findAll(node, pred, out = []) {
 
 // Regression: the window's header "x" used to only flip store.open, leaving
 // the review wait pending (composer still taken over, window popping back
-// after a session switch). It must DISMISS the review - respond with the
-// cancel payload, exactly like the footer "Chat instead" button.
-test('window close button dismisses the review instead of hiding it', async () => {
-  const { WindowFrame, dismissPayload, store } = loadClientBundle().__testables
-  const sent = []
+// after a session switch). It must DISMISS the review - call the carrier's
+// cancel() verb, exactly like the footer "Chat instead" button - so the wait
+// settles (ASK_CANCELLED), the pending interaction drops the carrier and the
+// composer chain falls back to the input bar.
+test('window buttons drive the carrier answer/cancel verbs', async () => {
+  const { WindowFrame, approveAnswer, keepPlanningAnswer, store } = loadClientBundle().__testables
+  const answered = []
+  const cancelled = []
   const carrier = {
+    kind: 'plan-review',
     key: 'q:1',
     sessionId: 's1',
-    respond: (payload) => { sent.push(payload); return Promise.resolve({ accepted: true }) },
+    questions: [planQuestion()],
+    answer: (a) => { answered.push(a); return Promise.resolve() },
+    cancel: () => { cancelled.push(true); return Promise.resolve() },
   }
   const review = {
     id: 'plan-review', question: 'Approve this plan and leave plan mode?',
     plan: '# Title\n\nbody', approveLabel: 'Approve', declineLabel: 'Keep planning',
   }
+
+  // one seeded comment so keep-planning is submittable and quoted in feedback
+  store.comments = [{ cid: 'c1', blockIndex: 0, quote: 'body', text: 'tighten step 2' }]
   const tree = WindowFrame({ wait: carrier, review })
   const close = findAll(tree, props => props.className === 'plnwin-close')[0]
   assert.ok(close, 'the header close button must render')
@@ -250,17 +260,30 @@ test('window close button dismisses the review instead of hiding it', async () =
 
   store.open = true
   close.args[1].onClick()
-  assert.deepEqual(sent, [dismissPayload()], 'clicking "x" must send the cancel payload')
-  assert.equal(sent[0].ok, false)
-  assert.equal(sent[0].error.code, 'cancelled')
+  assert.equal(cancelled.length, 1, 'clicking "x" must cancel the pending review')
   assert.equal(store.open, true, '"x" dismisses the review; it must not merely hide the window')
 
   // the footer "Chat instead" button shares the same dismiss path
   const discuss = findAll(tree, props => props.className === 'plnwin-btn plnwin-btn-ghost')[0]
   assert.ok(discuss, 'the footer Chat-instead button must render')
   discuss.args[1].onClick()
-  assert.equal(sent.length, 2, 'the footer button sends the same dismissal')
-  await Promise.resolve() // let the receipt callbacks settle
+  assert.equal(cancelled.length, 2, 'the footer button sends the same dismissal')
+
+  // approve answers the review with the approve option selected
+  const approve = findAll(tree, props => props.className === 'plnwin-btn plnwin-btn-primary')[0]
+  assert.ok(approve, 'the approve button must render')
+  approve.args[1].onClick()
+  assert.deepEqual(answered, [approveAnswer('plan-review', 'Approve')])
+
+  // keep-planning answers with empty selected + the formatted comment text
+  const keep = findAll(tree, props => props.className === 'plnwin-btn plnwin-btn-outline')[0]
+  assert.ok(keep, 'the keep-planning button must render')
+  keep.args[1].onClick()
+  assert.equal(answered.length, 2)
+  assert.deepEqual(answered[1], keepPlanningAnswer('plan-review', answered[1].answers[0].custom))
+  assert.match(answered[1].answers[0].custom, /tighten step 2/)
+  assert.deepEqual(answered[1].answers[0].selected, [])
+  await Promise.resolve() // let the settlement callbacks run
 })
 
 test('clampGeo keeps the window reachable inside the viewport', () => {
