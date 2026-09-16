@@ -4,6 +4,13 @@
 // so the pure logic is exercised by evaluating its factory in this process
 // with a stubbed loader and a stubbed `require('react')`; rendering itself
 // is covered by manual verification in the web GUI.
+//
+// Contract under test mirrors the pending-interaction composer protocol of
+// the current DSH web client: the `conversation.composer` chain hands each
+// selector ONE effective interaction (`props.pendingInteraction`), the
+// ui-user-questions carrier keeps `questions` on itself and tags a
+// reviewable request `kind: 'plan-review'`, and decisions settle through
+// the carrier methods `answer({answers})` / `cancel()`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -39,8 +46,6 @@ function loadClientBundle() {
   return loaded.factory(require_)
 }
 
-const wait = (questions) => ({ kind: 'question', key: 'k1', sessionId: 's1', payload: { questions } })
-
 const planQuestion = (overrides = {}) => ({
   id: 'plan-review',
   header: 'Plan review',
@@ -54,15 +59,59 @@ const planQuestion = (overrides = {}) => ({
   ...overrides,
 })
 
+/**
+ * PendingQuestion-shaped carrier: `questions` ride the carrier itself,
+ * `kind` discriminates (the shipped class derives it from the batch), and
+ * the two settlement methods record their calls for assertions.
+ */
+function makePending(questions = [planQuestion()], overrides = {}) {
+  const calls = { answers: [], cancels: 0 }
+  const pending = {
+    kind: 'plan-review',
+    key: 'k1',
+    sessionId: 's1',
+    questions,
+    answer: (answer) => { calls.answers.push(answer); return Promise.resolve() },
+    cancel: () => { calls.cancels += 1; return Promise.resolve() },
+  }
+  return Object.assign(pending, { __calls: calls }, overrides)
+}
+
 test('bundle exports the cordis plugin contract', () => {
   const exports = loadClientBundle()
   assert.equal(typeof exports.apply, 'function')
   assert.deepEqual(exports.inject, ['slots', 'locale'])
 })
 
+test('selectPlanReview claims only a settle-capable plan-review interaction', () => {
+  const { selectPlanReview } = loadClientBundle().__testables
+  const review = makePending()
+  // the one effective interaction of the current session
+  assert.equal(selectPlanReview({ pendingInteraction: review }), review)
+  // nothing pending / absent prop / crash-safe on odd shapes
+  assert.equal(selectPlanReview({ pendingInteraction: undefined }), null)
+  assert.equal(selectPlanReview({}), null)
+  assert.equal(selectPlanReview(null), null)
+  // a generic question interaction falls through to the shipped composer
+  const generic = makePending(
+    [{ id: 'q1', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }],
+    { kind: 'question' },
+  )
+  assert.equal(selectPlanReview({ pendingInteraction: generic }), null)
+  // the legacy list prop is no longer part of the contract
+  assert.equal(selectPlanReview({ interactions: [review] }), null)
+  // kind tag without a narrowable review falls through
+  assert.equal(selectPlanReview({ pendingInteraction: makePending([planQuestion(), planQuestion()]) }), null)
+  // a carrier missing the settlement methods cannot be answered safely
+  const bare = { kind: 'plan-review', key: 'x', questions: [planQuestion()] }
+  assert.equal(selectPlanReview({ pendingInteraction: bare }), null)
+  const noCancel = makePending([planQuestion()], { cancel: undefined })
+  assert.equal(selectPlanReview({ pendingInteraction: noCancel }), null)
+})
+
 test('asPlanReview narrows exactly the plan-review shape', () => {
   const { asPlanReview } = loadClientBundle().__testables
-  const review = asPlanReview(wait([planQuestion()]))
+  const review = asPlanReview(makePending())
   assert.deepEqual(review, {
     id: 'plan-review',
     question: 'Approve this plan and leave plan mode?',
@@ -70,23 +119,25 @@ test('asPlanReview narrows exactly the plan-review shape', () => {
     approveLabel: 'Approve',
     declineLabel: 'Keep planning',
   })
-  // not a question carrier
+  // not a carrier
   assert.equal(asPlanReview(null), null)
-  assert.equal(asPlanReview({ payload: {} }), null)
+  assert.equal(asPlanReview({}), null)
+  // the legacy payload-wrapped shape is gone from the protocol
+  assert.equal(asPlanReview({ kind: 'plan-review', payload: { questions: [planQuestion()] } }), null)
   // two questions, no intent, no detail, multiSelect, 3 options, approve mismatch
-  assert.equal(asPlanReview(wait([planQuestion(), planQuestion()])), null)
-  assert.equal(asPlanReview(wait([planQuestion({ intent: undefined })])), null)
-  assert.equal(asPlanReview(wait([planQuestion({ detail: undefined })])), null)
-  assert.equal(asPlanReview(wait([planQuestion({ multiSelect: true })])), null)
-  assert.equal(asPlanReview(wait([planQuestion({
+  assert.equal(asPlanReview(makePending([planQuestion(), planQuestion()])), null)
+  assert.equal(asPlanReview(makePending([planQuestion({ intent: undefined })])), null)
+  assert.equal(asPlanReview(makePending([planQuestion({ detail: undefined })])), null)
+  assert.equal(asPlanReview(makePending([planQuestion({ multiSelect: true })])), null)
+  assert.equal(asPlanReview(makePending([planQuestion({
     options: [{ label: 'Approve' }, { label: 'Keep planning' }, { label: 'Other' }],
   })])), null)
-  assert.equal(asPlanReview(wait([planQuestion({
+  assert.equal(asPlanReview(makePending([planQuestion({
     intent: { kind: 'plan-review', approve: 'Nonexistent' },
   })])), null)
   // approve-only single option is still claimable (decline absent)
   assert.deepEqual(
-    asPlanReview(wait([planQuestion({ options: [{ label: 'Approve' }] })])),
+    asPlanReview(makePending([planQuestion({ options: [{ label: 'Approve' }] })])),
     { id: 'plan-review', question: 'Approve this plan and leave plan mode?', plan: '# Title\n\nbody', approveLabel: 'Approve', declineLabel: null },
   )
 })
@@ -136,39 +187,23 @@ test('formatFeedback renders the numbered quoted list', () => {
   )
 })
 
-// Regression: the plan-review question is single-select, and apiproxy's
-// matchesQuestions rejects an answer item carrying BOTH selected and custom
-// as `bad-response`. Keep-planning must send selected: [] + custom.
-test('decision payloads satisfy the single-select XOR wire rule', () => {
-  const { approvePayload, keepPlanningPayload } = loadClientBundle().__testables
-  const approve = approvePayload('s1', 'plan-review', 'Approve')
-  assert.deepEqual(approve, {
-    ok: true,
-    value: { sessionId: 's1', answer: { answers: [{ id: 'plan-review', selected: ['Approve'] }] } },
-  })
-  assert.equal(approve.value.answer.answers[0].custom, undefined)
+// Regression: the plan-review question is single-select, and the shipped
+// single-select flow sends `selected` or non-empty `custom`, never both.
+// Keep-planning must send selected: [] + custom; approve must carry no
+// custom (the host approves ONLY on selected === [Approve] with no custom).
+test('decision answers satisfy the single-select XOR rule', () => {
+  const { approveAnswer, keepPlanningAnswer } = loadClientBundle().__testables
+  const approve = approveAnswer('plan-review', 'Approve')
+  assert.deepEqual(approve, { answers: [{ id: 'plan-review', selected: ['Approve'] }] })
+  assert.equal(approve.answers[0].custom, undefined)
 
-  const keep = keepPlanningPayload('s1', 'plan-review', '计划评审意见（共 1 条）：\n1. …')
-  const keepItem = keep.value.answer.answers[0]
-  assert.equal(keep.ok, true)
-  assert.equal(keep.value.sessionId, 's1')
+  const feedback = '计划评审意见（共 1 条）：\n1. …'
+  const keep = keepPlanningAnswer('plan-review', feedback)
+  const keepItem = keep.answers[0]
   assert.equal(keepItem.id, 'plan-review')
   assert.deepEqual(keepItem.selected, [])
-  assert.equal(typeof keepItem.custom, 'string')
+  assert.equal(keepItem.custom, feedback)
   assert.ok(keepItem.custom.trim() !== '')
-})
-
-// Regression (close "did not actually close"): dismissing the review must
-// use the shipped PendingQuestion.cancel encoding - ok:false + cancelled
-// error - so the host settles the wait (ASK_CANCELLED), the pending list
-// drops the carrier and the composer chain falls back to the input bar
-// (conversation mode).
-test('dismissPayload mirrors the shipped cancel encoding', () => {
-  const { dismissPayload } = loadClientBundle().__testables
-  assert.deepEqual(dismissPayload(), {
-    ok: false,
-    error: { code: 'cancelled', message: 'the user closed this question request', details: {} },
-  })
 })
 
 // Regression (window popped back after switching sessions): the composer
@@ -182,7 +217,7 @@ test('electReview auto-opens only a new carrier, keeping a user-hidden window hi
     wait: null, review: null, open: true, openKey: null, geo: null,
     commentKey: null, comments: [], lastAdded: null, listeners: new Set(),
   })
-  const carrier = wait([planQuestion()]) // key 'k1'
+  const carrier = makePending() // key 'k1'
 
   const store = freshStore()
   assert.notEqual(electReview(store, carrier), null)
@@ -201,7 +236,7 @@ test('electReview auto-opens only a new carrier, keeping a user-hidden window hi
   assert.equal(store.comments.length, 1, 'same-key remount must keep draft comments')
 
   // model re-submits: a new carrier key reopens with a clean comment list
-  const resubmitted = { ...carrier, key: 'k2' }
+  const resubmitted = makePending([planQuestion()], { key: 'k2' })
   assert.notEqual(electReview(store, resubmitted), null)
   assert.equal(store.open, true, 'a new review reopens the window')
   assert.equal(store.openKey, 'k2')
@@ -209,7 +244,8 @@ test('electReview auto-opens only a new carrier, keeping a user-hidden window hi
 
   // a non-review carrier is declined without touching the store
   const untouched = freshStore()
-  assert.equal(electReview(untouched, { kind: 'question', key: 'x', payload: { questions: [] } }), null)
+  const generic = makePending([{ id: 'q1', question: 'Pick one' }], { kind: 'question' })
+  assert.equal(electReview(untouched, generic), null)
   assert.equal(untouched.wait, null)
   assert.equal(untouched.openKey, null)
 })
@@ -227,40 +263,64 @@ function findAll(node, pred, out = []) {
   return out
 }
 
+const reviewFace = () => ({
+  id: 'plan-review', question: 'Approve this plan and leave plan mode?',
+  plan: '# Title\n\nbody', approveLabel: 'Approve', declineLabel: 'Keep planning',
+})
+
 // Regression: the window's header "x" used to only flip store.open, leaving
 // the review wait pending (composer still taken over, window popping back
-// after a session switch). It must DISMISS the review - respond with the
-// cancel payload, exactly like the footer "Chat instead" button.
-test('window close button dismisses the review instead of hiding it', async () => {
-  const { WindowFrame, dismissPayload, store } = loadClientBundle().__testables
-  const sent = []
-  const carrier = {
-    key: 'q:1',
-    sessionId: 's1',
-    respond: (payload) => { sent.push(payload); return Promise.resolve({ accepted: true }) },
-  }
-  const review = {
-    id: 'plan-review', question: 'Approve this plan and leave plan mode?',
-    plan: '# Title\n\nbody', approveLabel: 'Approve', declineLabel: 'Keep planning',
-  }
-  const tree = WindowFrame({ wait: carrier, review })
+// after a session switch). It must DISMISS the review - cancel() the
+// carrier, exactly like the footer "Chat instead" button.
+test('window close and Chat-instead dismiss the review via cancel()', async () => {
+  const { WindowFrame, store } = loadClientBundle().__testables
+  const carrier = makePending()
+  const tree = WindowFrame({ wait: carrier, review: reviewFace() })
+
   const close = findAll(tree, props => props.className === 'plnwin-close')[0]
   assert.ok(close, 'the header close button must render')
   assert.equal(close.args[1].title, '关闭并转为对话')
 
   store.open = true
   close.args[1].onClick()
-  assert.deepEqual(sent, [dismissPayload()], 'clicking "x" must send the cancel payload')
-  assert.equal(sent[0].ok, false)
-  assert.equal(sent[0].error.code, 'cancelled')
+  assert.equal(carrier.__calls.cancels, 1, 'clicking "x" must cancel the carrier')
+  assert.equal(carrier.__calls.answers.length, 0)
   assert.equal(store.open, true, '"x" dismisses the review; it must not merely hide the window')
 
   // the footer "Chat instead" button shares the same dismiss path
   const discuss = findAll(tree, props => props.className === 'plnwin-btn plnwin-btn-ghost')[0]
   assert.ok(discuss, 'the footer Chat-instead button must render')
   discuss.args[1].onClick()
-  assert.equal(sent.length, 2, 'the footer button sends the same dismissal')
-  await Promise.resolve() // let the receipt callbacks settle
+  assert.equal(carrier.__calls.cancels, 2, 'the footer button sends the same dismissal')
+  await Promise.resolve() // let the settlement callbacks run
+})
+
+// Approve settles the carrier with selected: [Approve] and no custom;
+// keep-planning requires comment text and sends selected: [] + custom.
+test('decision buttons settle the carrier through answer()', async () => {
+  const { WindowFrame, store } = loadClientBundle().__testables
+  const carrier = makePending()
+  const review = reviewFace()
+
+  // without comment text the keep button renders disabled and approve works
+  store.comments = []
+  const bare = WindowFrame({ wait: carrier, review })
+  const approveBtn = findAll(bare, props => props.className === 'plnwin-btn plnwin-btn-primary')[0]
+  approveBtn.args[1].onClick()
+  assert.deepEqual(carrier.__calls.answers, [{ answers: [{ id: 'plan-review', selected: ['Approve'] }] }])
+
+  // with a drafted comment the keep button sends the feedback batch
+  store.comments = [{ cid: 'c1', blockIndex: 0, quote: '# Title', text: 'tighten step 2' }]
+  const withText = WindowFrame({ wait: carrier, review })
+  const keepBtn = findAll(withText, props => props.className === 'plnwin-btn plnwin-btn-outline')[0]
+  keepBtn.args[1].onClick()
+  assert.equal(carrier.__calls.answers.length, 2)
+  const keepItem = carrier.__calls.answers[1].answers[0]
+  assert.equal(keepItem.id, 'plan-review')
+  assert.deepEqual(keepItem.selected, [])
+  assert.equal(keepItem.custom, '计划评审意见（共 1 条）：\n1. 「# Title」 —— tighten step 2')
+  assert.equal(carrier.__calls.cancels, 0, 'decisions answer; they never cancel')
+  await Promise.resolve()
 })
 
 test('clampGeo keeps the window reachable inside the viewport', () => {

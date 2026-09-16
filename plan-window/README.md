@@ -11,15 +11,17 @@ DeepSeek Harness（DSH）计划模式的**浮动评审窗口**：把 `exit_plan_
 | 自由窗口 | 注册在 `shell.overlay`（框架级浮动层），但窗口本体经 `createPortal` 挂到 `document.body`、`z-index:1200`——盖过宿主 Modal（1000）/Toast（1100）及其他插件浮层（overlay 容器自身是 z-index:20 的 stacking context，不逃出会被封顶）：标题栏拖拽（pointer capture）、右下角缩放；首次打开按视口居中（默认 920×720，随视口自适应缩小）；位置与尺寸始终钳制在视口内（至少保留 160×120 可见可抓取，不会拖出屏幕丢失），跨多次计划提交保留 |
 | 划选评论 | 在计划正文划选文字松开 → 右栏生成带引用的评论卡（Selection API 不可用时退化为段落悬停 “＋”）；评论可编辑、删除；已评论段落左侧高亮 |
 | 关闭即取消 | 窗口标题栏「×」**取消本次评审**（`ASK_CANCELLED`，与「改为对话」同一条取消编码）：等待结算、pending 列表移除、状态条卸载、输入区归还--会话回到对话模式，关闭是真正的关闭。状态条的「收起/显示窗口」是**非破坏性**的临时收起，且收起状态跨会话切换保持（composer 条目是 session 作用域，切换会话会重挂载；自动弹出只发生在**新的** carrier key 上，即模型重新提交的计划，同一评审重挂载不会复活已收起的窗口） |
-| 评论驱动修订 | 「提交评论并继续规划」以 `['Keep planning'] + custom(全部评论)` 回答评审问题 —— `exit_plan_mode` 的工具结果会携带这些反馈失败返回，模型据此修订并重新提交，窗口自动刷新、评论清空 |
-| 批准 / 对话 | 「批准」回答 `['Approve']`（正常退出计划模式）；「改为对话」与窗口「×」以 `ASK_CANCELLED` 取消等待，归还输入区 |
+| 评论驱动修订 | 「提交评论并继续规划」以 `{selected: [], custom: 全部评论}` 回答评审问题 —— `exit_plan_mode` 的工具结果会携带这些反馈失败返回，模型据此修订并重新提交，窗口自动刷新、评论清空 |
+| 批准 / 对话 | 「批准」回答 `{selected: ['Approve']}`（正常退出计划模式）；「改为对话」与窗口「×」调用载体的 `cancel()`（宿主瀑布以 `ASK_CANCELLED` 拒绝），归还输入区 |
 | 精确接管，可安全卸载 | 以 priority `-1` 只认领 plan-review 提问；普通提问卡、审批卡不受影响。插件崩溃或卸载时自动回退官方评审卡 |
 
 ## 工作原理
 
-- `conversation.composer` 链条目（priority `-1`，早于内置提问卡）：selector 只匹配通过 plan-review 收窄检查的 `PendingWait`（单问题、`intent.kind === 'plan-review'`、计划在 `detail`、二元单选）。当选后输入区渲染一条状态条（含「显示/隐藏窗口」）。当选时把 carrier 发布进共享 store，并**按 carrier key 记忆开合状态**：窗口只在出现新 key（模型重新提交的计划）时自动弹出；条目随会话切换重挂载时，沿用用户对同一评审的收起选择（评论草稿同理保留）。
+适配**新版 DSH 的 pending-interaction composer 协议**：
+
+- `conversation.composer` 链条目（priority `-1`，早于内置提问卡的默认 0）：链条现在把当前会话**唯一生效的交互**作为 `props.pendingInteraction` 交给每个选择器。本插件的选择器只认领 `kind === 'plan-review'` 且能收窄为评审（单问题、`intent.kind === 'plan-review'`、计划在 `detail`、二元单选）、且带 `answer()/cancel()` 结算方法的载体；普通提问（`kind: 'question'`）、审批等其他交互原样落回内置条目。当选后输入区渲染一条状态条（含「显示/隐藏窗口」）。当选时把载体发布进共享 store，并**按载体 key 记忆开合状态**：窗口只在出现新 key（模型重新提交的计划）时自动弹出；条目随会话切换重挂载时，沿用用户对同一评审的收起选择（评论草稿同理保留）。
 - `shell.overlay` list 条目 `plan-window`：渲染浮动窗口本体（经 `createPortal` 挂 `document.body`，`z-index:1200`，宿主/插件浮层之上），无评审挂起时返回 `null`。
-- 回答编码完全镜像内置 `PendingQuestion`：`respond({ok:true, value:{sessionId, answer:{answers:[{id, selected, custom}]}}})`；取消（「改为对话」与窗口「×」）为 `respond({ok:false, error:{code:'cancelled', ...}})`。每次检查 `receipt.accepted`，被拒时解锁按钮并显示原因。
+- 决策完全镜像内置 `PendingQuestion` 的载体方法：批准为 `wait.answer({answers:[{id, selected:[approveLabel]}]})`；带反馈继续规划为 `wait.answer({answers:[{id, selected:[], custom: 反馈文本}]})`（单选回答不带 `selected` 与非空 `custom` 并存；宿主把一切非批准项读作 keep-planning，`custom` 即反馈）；取消（「改为对话」与窗口「×」）为 `wait.cancel()`（宿主瀑布以 `ASK_CANCELLED` 拒绝）。结算失败（如竞态下重复结算抛错）会解锁按钮并显示原因，成功后窗口随 pending 列表移除而卸载。
 - 纯 Client 插件：宿主半边 `src/index.js` 为 no-op（组合行有包可挂即可，同时让 client-modules 发现并伺服浏览器半边）。
 
 ## 安装
