@@ -40,6 +40,31 @@ dsh plugin --profile web add link:./patent-disclosure
 
 设置 → 预设 agent 中出现「技术交底书」；选它开新会话即用。
 
+## 预设垫片维护（每次升级 dsh 后必做）
+
+`~/.dsh/.agent-presets/patent-disclosure/agent.cordis.yml` 是 shipped `standard` 预设的**静态副本**，
+dsh 升级不会自动更新它——上游改了行（改名/删除包）后该预设会在挂载时报
+`row "…" names a plugin that cannot be resolved` 而加载失败（2026-09-16 就因上游移除
+`dsh-workflow-worker-thread` 换成 `dsh-workflow-ptc` 坏过一次）。升级后重新同步：
+
+```bash
+# 1. 与当前 shipped standard 对比（roster 路径见 dsh 安装）
+diff <shipped-standard>/agent.cordis.yml ~/.dsh/.agent-presets/patent-disclosure/agent.cordis.yml
+
+# 2. 以新版 standard 为底重建垫片，重新应用仅有的三处本地差异：
+#    a. persona 行：prefix 换成上面 src/index.js 注释里的中文技术交底书 persona（勿带英文 suffix 行）
+#    b. persona 行后加 disclosure-skill / cn-patent-skill 两行（本文件上方架构节）
+#    c. 文件头注释改为本预设说明
+# 3. 仓库留档：本目录 preset-shim/agent.cordis.yml 是当前垫片的源档，改垫片请同步改它
+```
+
+验证挂载是否恢复（报错即仍未修好）：
+
+```bash
+dsh 插件不提供 CLI 校验；在任一 agent 会话里注册一次性工具调 agentPresets.standingKeyFor('patent-disclosure')，
+或直接选「技术交底书」开新会话看技能目录是否出现 tech-disclosure / patent-disclosure-skill。
+```
+
 ## 使用
 
 - 开会话时把**代码仓库路径**给 agent（或在仓库目录里开会话）；没有代码也可以，agent 会做结构化访谈。
